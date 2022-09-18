@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Xml;
@@ -14,28 +15,46 @@ using Unicorn.PowerShell.Sql;
 
 namespace Unicorn.PowerShell
 {
-    public static class BulkItemExtractor
+    public class BulkItemExtractor
     {
-        private static IFieldFilter CreateFieldFilter()
+        private string _fieldsToExcludeValue;
+        private string _itemsToExcludeValue;
+
+        public BulkItemExtractor(string fieldsToExclude = "", string itemsToExclude = "")
         {
+            _fieldsToExcludeValue = fieldsToExclude;
+            _itemsToExcludeValue = itemsToExclude;
+        }
+
+        private IFieldFilter CreateFieldFilter()
+        {
+            var fieldsToExclude = _fieldsToExcludeValue.Split(new string[1] { "|" }, StringSplitOptions.RemoveEmptyEntries);
+
+            var sb = new StringBuilder();
+
             // Updated to allow Revision to come back.
-            var config = @"<fieldFilter type=""Rainbow.Filtering.ConfigurationFieldFilter, Rainbow"" singleInstance=""true"">
+            sb.Append(@"<fieldFilter type=""Rainbow.Filtering.ConfigurationFieldFilter, Rainbow"" singleInstance=""true"">
 					<exclude fieldID=""{B1E16562-F3F9-4DDD-84CA-6E099950ECC0}"" note=""'Last run' field on Schedule template (used to register tasks)"" />
 					<exclude fieldID=""{52807595-0F8F-4B20-8D2A-CB71D28C6103}"" note=""'__Owner' field on Standard Template"" />
 					<exclude fieldID=""{F6D8A61C-2F84-4401-BD24-52D2068172BC}"" note=""'__Originator' field on Standard Template"" />
 					<exclude fieldID=""{D9CF14B1-FA16-4BA6-9288-E8A174D4D522}"" note=""'__Updated' field on Standard Template"" />
 					<exclude fieldID=""{BADD9CF9-53E0-4D0C-BCC0-2D784C282F6A}"" note=""'__Updated by' field on Standard Template"" />
-					<exclude fieldID=""{001DD393-96C5-490B-924A-B0F25CD9EFD8}"" note=""'__Lock' field on Standard Template"" />
-				</fieldFilter>";
+					<exclude fieldID=""{001DD393-96C5-490B-924A-B0F25CD9EFD8}"" note=""'__Lock' field on Standard Template"" />");
 
+            foreach (var fieldId in fieldsToExclude)
+            {
+                sb.Append($"<exclude fieldID='{fieldId}' />");
+            }
+
+            sb.Append("</fieldFilter>");
 
             var doc = new XmlDocument();
-            doc.LoadXml(config);
+            doc.LoadXml(sb.ToString());
 
             return new ConfigurationFieldFilter(doc.DocumentElement);
         }
 
-        private static YamlSerializationFormatter CreateFormatter(IFieldFilter filter)
+        private YamlSerializationFormatter CreateFormatter(IFieldFilter filter)
         {
             // shut yer gob again :D
             var config = @"<serializationFormatter type=""Rainbow.Storage.Yaml.YamlSerializationFormatter, Rainbow.Storage.Yaml"" singleInstance=""true"">
@@ -50,7 +69,7 @@ namespace Unicorn.PowerShell
             return new YamlSerializationFormatter(doc.DocumentElement, filter);
         }
 
-        private static string ProcessIItemData(IItemData item)
+        private string ProcessIItemData(IItemData item)
         {
             if (item == null) return null;
 
@@ -69,10 +88,13 @@ namespace Unicorn.PowerShell
             }
         }
 
-        private static List<string> ItemExtractor(BlockingCollection<IItemData> itemsToExtract, CancellationToken cancellationToken)
+        private List<string> ItemExtractor(BlockingCollection<IItemData> itemsToExtract, CancellationToken cancellationToken)
         {
             Thread.CurrentThread.Priority = ThreadPriority.Lowest;
 
+            var itemsToExcludeIds = _itemsToExcludeValue.ToLower().Split(new string[1] { "|" }, StringSplitOptions.RemoveEmptyEntries).ToList(); ;
+
+            var skipCount = 0;
             var yamlItems = new List<string>();
             using (new SyncOperationContext())
             {
@@ -81,6 +103,12 @@ namespace Unicorn.PowerShell
                     if (!itemsToExtract.TryTake(out var item, -1))
                     {
                         break;
+                    }
+
+                    if (itemsToExcludeIds.Contains(item.Id.ToString().ToLower()))
+                    {
+                        skipCount++;
+                        continue;
                     }
 
                     var yaml = ProcessIItemData(item);
@@ -93,8 +121,8 @@ namespace Unicorn.PowerShell
 
             return yamlItems;
         }
-        
-        public static string[] LoadItems(string rootId, string[] itemIds)
+
+        public string[] LoadItems(string rootId, string[] itemIds)
         {
             if (string.IsNullOrEmpty(rootId)) return null;
             if (itemIds == null) return null;
@@ -124,7 +152,7 @@ namespace Unicorn.PowerShell
             {
                 running.Add(Task.Run(() => ItemExtractor(itemsToExtract, cancellationToken), cancellationToken));
             }
-            
+
             foreach (var t in running)
             {
                 t.Wait(cancellationToken);

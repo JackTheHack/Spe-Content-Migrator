@@ -32,7 +32,7 @@ namespace Unicorn.PowerShell.Sql
         }
 
         public Database Database { get; }
-        
+
         private TemplateField GetTemplateField(Guid fieldId, Guid templateId)
         {
             TemplateField result;
@@ -127,7 +127,7 @@ namespace Unicorn.PowerShell.Sql
 
             var newVersion = new SqlItemVersion
             {
-                Language = new CultureInfo(language), 
+                Language = new CultureInfo(language),
                 VersionNumber = version
             };
             newVersion.RawFields.Add(currentField);
